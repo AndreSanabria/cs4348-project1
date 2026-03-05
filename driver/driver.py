@@ -218,11 +218,16 @@ def main() -> int:
 
             if command == "history":
                 show_history(history)
-                send_logger_message(logger_process, "RESULT", f"Displayed {len(history)} history entries.")
+                send_logger_message(
+                    logger_process,
+                    "RESULT",
+                    f"Displayed {len(history)} history entries.",
+                )
                 continue
 
             if command == "quit":
                 send_logger_message(logger_process, "RESULT", "Driver exiting.")
+                send_logger_message(logger_process, "EXIT", "Driver exited.")
                 return 0
 
             print("Error: unknown command.")
