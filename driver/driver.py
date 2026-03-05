@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+import subprocess
 import sys
 
 
@@ -12,14 +14,73 @@ MENU = """Commands:
 """
 
 
+def start_processes(log_file: str) -> tuple[subprocess.Popen[str], subprocess.Popen[str]]:
+    project_dir = Path(__file__).resolve().parents[1]
+    logger_script = project_dir / "logger" / "logger.py"
+    encryption_script = project_dir / "encryption" / "encryption.py"
+
+    if not logger_script.is_file():
+        raise FileNotFoundError(f"Logger script not found: {logger_script}")
+    if not encryption_script.is_file():
+        raise FileNotFoundError(f"Encryption script not found: {encryption_script}")
+
+    logger_process = subprocess.Popen(
+        [sys.executable, "-u", str(logger_script), log_file],
+        stdin=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    encryption_process = subprocess.Popen(
+        [sys.executable, "-u", str(encryption_script)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    return logger_process, encryption_process
+
+
+def stop_process(process: subprocess.Popen[str], send_quit: bool) -> None:
+    if send_quit and process.stdin is not None and process.poll() is None:
+        try:
+            process.stdin.write("QUIT\n")
+            process.stdin.flush()
+        except BrokenPipeError:
+            pass
+
+    if process.stdin is not None:
+        process.stdin.close()
+
+    if process.stdout is not None:
+        process.stdout.close()
+
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("Usage: python driver/driver.py <log_file>", file=sys.stderr)
         return 1
 
-    print(MENU, end="")
-    print("Stub driver: not implemented yet.")
-    return 0
+    log_file = sys.argv[1]
+    logger_process: subprocess.Popen[str] | None = None
+    encryption_process: subprocess.Popen[str] | None = None
+
+    try:
+        logger_process, encryption_process = start_processes(log_file)
+        print(MENU, end="")
+        print("Driver can now start logger and encryption processes.")
+        return 0
+    finally:
+        if encryption_process is not None:
+            stop_process(encryption_process, send_quit=True)
+        if logger_process is not None:
+            stop_process(logger_process, send_quit=True)
 
 
 if __name__ == "__main__":
