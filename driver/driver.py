@@ -14,6 +14,34 @@ MENU = """Commands:
 """
 
 
+def send_logger_message(process: subprocess.Popen[str], action: str, message: str) -> None:
+    if process.stdin is None or process.poll() is not None:
+        raise RuntimeError("Logger process is not available")
+
+    process.stdin.write(f"{action} {message}\n")
+    process.stdin.flush()
+
+
+def send_encryption_command(
+    process: subprocess.Popen[str],
+    command: str,
+    argument: str = "",
+) -> tuple[str, str]:
+    if process.stdin is None or process.stdout is None or process.poll() is not None:
+        raise RuntimeError("Encryption process is not available")
+
+    line = command if not argument else f"{command} {argument}"
+    process.stdin.write(f"{line}\n")
+    process.stdin.flush()
+
+    response = process.stdout.readline()
+    if response == "":
+        raise RuntimeError("Encryption process terminated unexpectedly")
+
+    status, _, message = response.rstrip("\r\n").partition(" ")
+    return status, message
+
+
 def start_processes(log_file: str) -> tuple[subprocess.Popen[str], subprocess.Popen[str]]:
     project_dir = Path(__file__).resolve().parents[1]
     logger_script = project_dir / "logger" / "logger.py"
@@ -73,9 +101,20 @@ def main() -> int:
 
     try:
         logger_process, encryption_process = start_processes(log_file)
+
+        send_logger_message(logger_process, "START", "Driver started.")
+
         print(MENU, end="")
-        print("Driver can now start logger and encryption processes.")
+
+        # Minimal smoke test: ask encryption to quit immediately so we know pipes work.
+        status, message = send_encryption_command(encryption_process, "PASS", "ABC")
+        if status == "RESULT":
+            send_logger_message(logger_process, "RESULT", "Encryption process responded to PASS.")
+        else:
+            send_logger_message(logger_process, "ERROR", f"Encryption process PASS failed: {message}")
+
         return 0
+
     finally:
         if encryption_process is not None:
             stop_process(encryption_process, send_quit=True)
