@@ -14,6 +14,13 @@ MENU = """Commands:
 """
 
 
+def normalize_letters(value: str) -> str | None:
+    cleaned = value.strip().upper()
+    if not cleaned or not cleaned.isalpha():
+        return None
+    return cleaned
+
+
 def send_logger_message(process: subprocess.Popen[str], action: str, message: str) -> None:
     if process.stdin is None or process.poll() is not None:
         raise RuntimeError("Logger process is not available")
@@ -40,6 +47,57 @@ def send_encryption_command(
 
     status, _, message = response.rstrip("\r\n").partition(" ")
     return status, message
+
+
+def show_history(history: list[str]) -> None:
+    if not history:
+        print("History is empty.")
+        return
+
+    print("History:")
+    for index, value in enumerate(history, start=1):
+        print(f"  {index}. {value}")
+
+
+def choose_history_value(history: list[str]) -> str | None:
+    while True:
+        show_history(history)
+        print("  0. Enter a new string")
+        choice = input("Select an entry: ").strip()
+
+        if not choice.isdigit():
+            print("Enter a valid number.")
+            continue
+
+        selection = int(choice)
+        if selection == 0:
+            return None
+        if 1 <= selection <= len(history):
+            return history[selection - 1]
+
+        print("Enter a valid number.")
+
+
+def choose_letters(history: list[str], prompt_text: str) -> tuple[str | None, bool]:
+    if history:
+        while True:
+            use_history = input("Use a string from history? (y/n): ").strip().lower()
+            if use_history in {"y", "yes"}:
+                selected = choose_history_value(history)
+                if selected is not None:
+                    return selected, True
+                break
+            if use_history in {"n", "no"}:
+                break
+            print("Enter y or n.")
+
+    candidate = input(prompt_text)
+    normalized = normalize_letters(candidate)
+    if normalized is None:
+        print("Error: input must contain only letters.")
+        return None, False
+
+    return normalized, False
 
 
 def start_processes(log_file: str) -> tuple[subprocess.Popen[str], subprocess.Popen[str]]:
@@ -98,22 +156,77 @@ def main() -> int:
     log_file = sys.argv[1]
     logger_process: subprocess.Popen[str] | None = None
     encryption_process: subprocess.Popen[str] | None = None
+    history: list[str] = []
 
     try:
         logger_process, encryption_process = start_processes(log_file)
-
         send_logger_message(logger_process, "START", "Driver started.")
 
-        print(MENU, end="")
+        while True:
+            print(MENU, end="")
+            command = input("Command: ").strip().lower()
+            if not command:
+                continue
 
-        # Minimal smoke test: ask encryption to quit immediately so we know pipes work.
-        status, message = send_encryption_command(encryption_process, "PASS", "ABC")
-        if status == "RESULT":
-            send_logger_message(logger_process, "RESULT", "Encryption process responded to PASS.")
-        else:
-            send_logger_message(logger_process, "ERROR", f"Encryption process PASS failed: {message}")
+            send_logger_message(logger_process, "COMMAND", command)
 
-        return 0
+            if command == "password":
+                password, _ = choose_letters(history, "Enter password: ")
+                if password is None:
+                    send_logger_message(
+                        logger_process,
+                        "ERROR",
+                        "Password update failed: input must contain only letters.",
+                    )
+                    continue
+
+                status, message = send_encryption_command(encryption_process, "PASS", password)
+                if status == "RESULT":
+                    print("Password updated.")
+                    send_logger_message(logger_process, "RESULT", "Password updated.")
+                else:
+                    print(f"Error: {message}")
+                    send_logger_message(logger_process, "ERROR", f"Password update failed: {message}")
+                continue
+
+            if command in {"encrypt", "decrypt"}:
+                value, from_history = choose_letters(history, f"Enter string to {command}: ")
+                if value is None:
+                    send_logger_message(
+                        logger_process,
+                        "ERROR",
+                        f"{command.title()} failed: input must contain only letters.",
+                    )
+                    continue
+
+                if not from_history:
+                    history.append(value)
+
+                status, message = send_encryption_command(encryption_process, command.upper(), value)
+                if status == "RESULT":
+                    print(f"Result: {message}")
+                    history.append(message)
+                    send_logger_message(
+                        logger_process,
+                        "RESULT",
+                        f"{command.title()} produced {message}.",
+                    )
+                else:
+                    print(f"Error: {message}")
+                    send_logger_message(logger_process, "ERROR", f"{command.title()} failed: {message}")
+                continue
+
+            if command == "history":
+                show_history(history)
+                send_logger_message(logger_process, "RESULT", f"Displayed {len(history)} history entries.")
+                continue
+
+            if command == "quit":
+                send_logger_message(logger_process, "RESULT", "Driver exiting.")
+                return 0
+
+            print("Error: unknown command.")
+            send_logger_message(logger_process, "ERROR", f"Unknown command: {command}")
 
     finally:
         if encryption_process is not None:
